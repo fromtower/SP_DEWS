@@ -25,4 +25,15 @@ class LCD:
         except:
             if len(msg) > 2:
                 print("LCD:MSG OVERFLOW")
-        
+
+    def line_write(self, msg:str, row:int, col:int) -> None:
+        try:
+            self._lcd._set_cursor_pos = (row, col)
+            if msg is not None and len(msg) > 0:
+                self._lcd.write_string(msg)
+
+        except:
+            if row > 0 or col > 0:
+                print("LCD:POSITION IS NOT DEFINED")
+            elif msg is not None and len(msg) == 0:
+                print("LCD:MSG LENGTH IS NOT BE 0")
