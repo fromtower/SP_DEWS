@@ -165,9 +165,6 @@ class PacketParser:
         self._buf = bytearray()
         self.crc_errors = 0
 
-    def reset(self) -> None:
-        self._buf.clear()
-
     def feed(self, data: bytes) -> list[Packet]:
         self._buf += data
         out: list[Packet] = []

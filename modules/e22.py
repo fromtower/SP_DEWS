@@ -117,13 +117,13 @@ class E22:
         self.close()
 
     # -- AUX / 모드
-    def wait_aux(self, timeout: float = 1.0) -> bool:
-        """AUX가 HIGH(모듈 준비 완료)가 될 때까지 대기. 시간 초과면 False."""
+    def wait_aux(self, timeout: float = 1.0, level: bool = True) -> bool:
+        """AUX가 level이 될 때까지 대기 (HIGH = 모듈 준비 완료). 시간 초과면 False."""
         if not self.use_gpio:
             time.sleep(0.01)
             return True
         t_end = time.monotonic() + timeout
-        while not self._aux.value:
+        while bool(self._aux.value) != level:
             if time.monotonic() > t_end:
                 return False
             time.sleep(0.001)
@@ -186,10 +186,11 @@ class E22:
         return E22Config.from_regs(resp[3:])
 
     def write_config(self, cfg: E22Config, permanent: bool = True) -> None:
-        params = cfg.to_regs()
+        # 07~08(암호 키)은 읽을 수 없어 다른 값이 남아 있어도 안 보임 → 항상 0으로 같이 씀
+        params = cfg.to_regs() + b"\x00\x00"
         head = 0xC0 if permanent else 0xC2      # C0 = 저장, C2 = 전원 끄면 사라짐
-        resp = self._config_cmd(bytes([head, 0x00, 0x07]) + params, 10)
-        if resp != b"\xC1\x00\x07" + params:
+        resp = self._config_cmd(bytes([head, 0x00, 0x09]) + params, 12)
+        if resp != b"\xC1\x00\x09" + params:
             raise IOError(f"설정 쓰기 실패: {resp.hex(' ') or '응답 없음'}")
 
 
@@ -208,7 +209,15 @@ if __name__ == "__main__":
     ap.add_argument("--channel", type=int, default=70)
     ap.add_argument("--air", type=float, default=2.4)
     ap.add_argument("--power", type=int, default=10)
+    ap.add_argument("--test", action="store_true", help="하드웨어 없이 레지스터 변환 자체 시험")
     args = ap.parse_args()
+
+    if args.test:
+        c = E22Config()
+        assert c.to_regs().hex() == "00000062034603", c.to_regs().hex()
+        assert E22Config.from_regs(c.to_regs()) == c
+        print("e22.py 자체 시험 통과")
+        raise SystemExit
 
     with E22(args.port, use_gpio=not args.no_gpio) as lora:
         if args.write:

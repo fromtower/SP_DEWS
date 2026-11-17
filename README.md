@@ -37,14 +37,24 @@
 | 파일                    | 실행 방식                                            | 상태                    | 설명                                               |
 | ----------------------- | ---------------------------------------------------- | ----------------------- | -------------------------------------------------- |
 | `protocol.py`         | import (자체 시험: `python protocol.py`)           | 완료, 자체 시험 통과    | 패킷 포장·개봉, CRC-16, 스트림 파서, seq 카운터   |
-| `e22.py`              | import (설정 도구: `python e22.py --read/--write`) | 작성 완료, 실기 시험 전 | 모드 전환(M0/M1), AUX 대기, 송수신, 레지스터 설정  |
-| `test_send.py`        | 직접 실행                                            | 작성 완료, 실기 시험 전 | 송신 시험 (`--raw` 글자 / 기본 경보 패킷)        |
-| `test_recv.py`        | 직접 실행                                            | 작성 완료, 실기 시험 전 | 수신 시험, 종료 시 전달률·CRC 오류·누락 seq 출력 |
-| `lcd.py`              | import                                               | 기존 유지               | I2C 16×2 LCD (PCF8574, 0x27)                      |
-| ~~`data.py`~~        | —                                                   | **삭제 대상**     | `protocol.py`로 대체                             |
-| ~~`transceiver.py`~~ | —                                                   | **삭제 대상**     | `e22.py`로 대체                                  |
+| `e22.py`              | import (설정 도구: `python e22.py --read/--write`, 자체 시험: `--test`) | 작성 완료, 실기 시험 전 | 모드 전환(M0/M1), AUX 대기, 송수신, 레지스터 설정  |
+| `alert_tx.py`         | import (실기 시험: `python alert_tx.py`)           | 작성 완료, 실기 시험 전 | 관측소 송신: 우선순위 TX 큐 + LoRa 스레드, ACK 대기·재전송 |
+| `alert_rx.py`         | 직접 실행                                            | 작성 완료, 실기 시험 전 | 지휘소 수신: ACK 회신, `(node_id, seq)` 중복 제거, GUI로 UDP JSON |
+| `test/test_alert.py`  | 직접 실행 (하드웨어 불필요)                          | 통과                    | 가짜 E22 2개로 우선순위·재전송·중복 제거·UDP 확인 |
+| `test/test_send.py`   | 직접 실행                                            | 실기 송수신 확인        | 송신 시험 (`--raw` 글자 / 기본 경보 패킷)        |
+| `test/test_recv.py`   | 직접 실행                                            | 실기 송수신 확인        | 수신 시험, 종료 시 전달률·CRC 오류·누락 seq 출력 |
+| `test/rssi_check.py`  | 직접 실행                                            | 실기 확인               | 채널 잡음·마지막 수신 패킷 세기(dBm) — 무선부 고장 진단용 |
+| `lcd.py`              | import                                               | 정리함                  | I2C 16×2 LCD (PCF8574, 0x27). ASCII만 가능        |
 
-`test_*.py`는 `from e22 import E22` 형태로 import하므로 `e22.py`, `protocol.py`와 같은 폴더에서 실행합니다.
+`test/` 안의 스크립트는 상위 `modules/`를 import 경로에 넣으므로 어느 폴더에서 실행해도 됩니다 (예: `modules`에서 `python test/test_send.py`).
+
+### 스레드 구조 (alert_tx / alert_rx)
+
+- 하드웨어 하나는 스레드 하나만 만진다. 관측소는 `lora-tx` 스레드만 E22를 쓰고, 다른 스레드는 `AlertTx.submit()`으로 큐에 넣기만 한다
+- 채널은 데이터 성격대로: 경보(빠지면 안 됨) = 크기 제한 `PriorityQueue`(위험 > 경계 > 관심, 가득 차면 새 것 버림), 종료 신호 = `threading.Event`
+- 재전송은 같은 seq 그대로 → 지휘소는 중복이어도 ACK를 다시 보내고(앞 ACK 유실 대비) GUI에는 한 번만 넘김
+- 지휘소는 장치가 LoRa 하나라 메인 루프가 E22를 독점(스레드 없음), GUI는 별도 프로세스(UDP `127.0.0.1:5005`)
+- 최신값 Mailbox는 ⑤ → ⑥(`alert_gen.py`)에서 필요해지면 추가
 
 ### 기존 코드에서 고친 문제 (재발 방지용 기록)
 
@@ -139,13 +149,21 @@ Threat(track_id, level, dist_m, speed_mps, tta_s, az_deg, el_deg, mode)  # mode:
 
 | 순서 | 어디서          | 명령                                                          | 확인                        |
 | ---- | --------------- | ------------------------------------------------------------- | --------------------------- |
-| 1    | 아무 PC         | `python protocol.py`                                        | "자체 시험 모두 통과"       |
+| 1    | 아무 PC         | `python protocol.py`, `python e22.py --test`, `python test/test_alert.py` | 모두 "통과"       |
 | 2    | Pi 2대 각각     | `python e22.py --read`                                      | 설정값 출력 → 배선 OK      |
 | 3    | Pi 2대 각각     | `python e22.py --write`                                     | 두 모듈 설정 일치           |
-| 4    | 수신 → 송신 순 | `python test_recv.py --raw` / `python test_send.py --raw` | `hello 0, 1, ...` 수신    |
-| 5    | 수신 → 송신 순 | `python test_recv.py` / `python test_send.py --count 100` | 패킷 출력, Ctrl+C 후 전달률 |
+| 4    | 수신 → 송신 순 | `python test/test_recv.py --raw` / `python test/test_send.py --raw` | `hello 0, 1, ...` 수신    |
+| 5    | 수신 → 송신 순 | `python test/test_recv.py` / `python test/test_send.py --count 100` | 패킷 출력, Ctrl+C 후 전달률 |
+| 6    | 수신 → 송신 순 | `python alert_rx.py` / `python alert_tx.py --count 20`  | ACK 20/20, 재전송 횟수 확인 |
 
 노트북은 `--no-gpio --port COM3`(또는 `/dev/ttyUSB0`)을 붙입니다.
+
+**아두이노 Uno를 USB-UART로 쓸 때** (11/17 실기 시험에서 확인)
+
+- 배선: E22 TXD → D1, D0 → (1 kΩ/2 kΩ 분압) → E22 RXD, VCC → 5V, M0 → GND, M1 → GND(송수신)/3.3V(설정), AUX 비움
+- **RESET → GND 필수**. 안 하면 Uno 칩이 D1을 붙잡아, 포트를 연 직후 응답 1번만 오고 수신이 전혀 안 됨 (`--read`만 되는 것처럼 보임)
+- GND 배선이 빵판 레일 끊김 등으로 떠 있으면 같은 증상 → 멀티미터 통전 확인
+- 모듈 설정이 서로 다르면(채널·키 등) 안 됨 → 두 모듈 모두 `e22.py --write` 1회
 
 `--read`에서 "응답 없음"이면 TX↔RX 교차 연결, M0/M1/AUX 핀 번호부터 확인하세요.
 
@@ -160,9 +178,9 @@ Threat(track_id, level, dist_m, speed_mps, tta_s, az_deg, el_deg, mode)  # mode:
 | 시기        | 작업                                   | 파일                               | 상태                     |
 | ----------- | -------------------------------------- | ---------------------------------- | ------------------------ |
 | 11/1주      | 패킷 형식 설계, 기존 코드 수정         | `protocol.py`, `e22.py`        | 완료 (형식은 팀 확인 전) |
-| 11/1주      | 보드 2대 송수신 시험                   | `test_send.py`, `test_recv.py` | **실기 시험 남음** |
-| 11/2주      | ACK 대기·재전송 (송신 측)             | `alert_tx.py`                    | 예정                     |
-| 11/2주      | ACK 회신·중복 제거 (수신 측)          | `alert_rx.py`                    | 예정                     |
+| 11/1주      | 보드 2대 송수신 시험                   | `test/test_send.py`, `test/test_recv.py` | 송수신 확인 (11/17, 노트북↔PC) |
+| 11/2주      | ACK 대기·재전송 (송신 측)             | `alert_tx.py`                    | 작성, 실기 시험 전       |
+| 11/2주      | ACK 회신·중복 제거 (수신 측)          | `alert_rx.py`                    | 작성, 실기 시험 전       |
 | 11/2~3주    | 판정 결과 → 경보 생성, 부저·LCD      | `alert_gen.py`                   | 예정                     |
 | 11/3주      | 지휘소 GUI 연동 (공동)                 | `gui.py`                         | 예정                     |
 | 11/3~4주    | 표시 지연·전달률 측정                 | `test_link.py`                   | 예정                     |
@@ -170,7 +188,7 @@ Threat(track_id, level, dist_m, speed_mps, tta_s, az_deg, el_deg, mode)  # mode:
 
 ### 실기 시험 때 기록할 것
 
-- `test_send.py`가 출력하는 **패킷당 송신 시간(ms)** → `alert_tx.py` 재전송 타임아웃의 근거
+- `test/test_send.py`가 출력하는 **패킷당 송신 시간(ms)** → `alert_tx.py`의 `ACK_TIMEOUT_S`·`RETRIES` 근거
 - 거리·장애물별 전달률, CRC 오류 횟수
 
 ### 열린 질문
