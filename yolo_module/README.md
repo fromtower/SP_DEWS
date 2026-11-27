@@ -10,6 +10,7 @@ pi/
   calibrate.py       스테레오 캘리브레이션 → stereo_calib.npz
   detect_stereo.py   스테레오 탐지 + 거리/접근속도 경고  ← 메인
   udp_receiver.py    아이폰 경고 수신
+  lcd_ui.py          1602 LCD 상태 화면 (detect_*.py --lcd)
 ios/     아이폰 앱 Swift 소스
 ```
 
@@ -85,6 +86,31 @@ python3 detect_stereo.py --backend hailo --hef drone.hef --calib stereo_calib.np
 - `--record rec/` 붙이면 좌우 원본 영상 저장 → 맥에서
   `python3 detect_stereo.py --backend ultralytics --weights best.pt --calib stereo_calib.npz --video rec/xxx_left.mp4 rec/xxx_right.mp4 --show`
 - UDP 출력 JSON에 거리, 접근속도, 도달예상시간, 방위각/고각이 들어감 → 요격 담당 팀원한테 넘길 인터페이스로 쓰면 됨
+
+## 6. LCD 상태 화면 (1602 I2C, `pi/lcd_ui.py`)
+
+배선: VCC → 2번(5V), GND → 6번, SDA → 3번(GPIO2), SCL → 5번(GPIO3)
+
+```bash
+sudo raspi-config nonint do_i2c 0 && sudo reboot     # I2C 켜기 (한 번만)
+sudo apt install i2c-tools && i2cdetect -y 1         # 27 (또는 3f) 보이면 OK
+pip install RPLCD smbus2
+python3 lcd_ui.py --demo                             # 탐지 없이 화면만 확인 (25초 시나리오)
+python3 detect_stereo.py --backend hailo --hef drone.hef --calib stereo_calib.npz --lcd   # detect_pi.py도 같음
+```
+
+| 화면 | 뜻 |
+|---|---|
+| `DET■ WARN□ ✣2  \|` | 감지 ON(■) / 경고 OFF(□) / 추적 중 드론 2대 / 끝 글자가 돌면 정상 동작 |
+| `23.5m* ↓4.2 L12°` | 제일 위험한 표적: 거리(`*` = 한쪽만 잡혀 크기로 추정), 4.2m/s로 접근(↑면 멀어짐), 왼쪽 12° |
+| `WARNING ETA 4.6s` | 경고 중 1줄이 번갈아 바뀜 + 백라이트 깜빡임 (`--lcd-no-blink`로 끔) |
+| `SCANNING 30fps` → `WARN x2 @14:03` → `IP ...` | CLEAR일 때 3초마다 넘어감 (경고 횟수·마지막 시각, SSH용 IP) |
+| `DET? WARN?` / `NO FRAME 5s` | 2초 넘게 프레임이 안 들어옴 (카메라/파이프라인 멈춤) |
+| `SP_DEWS` / `stopped` 또는 `ERR ...` | 프로그램 종료 / 에러로 죽음 |
+
+- 주소가 0x3f면 `--lcd 0x3f`, LCD 없이 맥에서 보려면 `--lcd fake` (터미널에 출력)
+- 글자 대신 네모만 보이거나 아무것도 안 보이면 → 백팩 뒤 가변저항(명암) 돌리기
+- LCD 선이 빠져도 탐지는 계속 돌고, 다시 꽂으면 3초 안에 알아서 재연결
 
 ## 튜닝
 

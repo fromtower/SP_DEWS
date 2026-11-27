@@ -26,6 +26,7 @@ import supervision as sv
 from trackers import ByteTrackTracker
 
 from detect_pi import HailoDetector, UltralyticsDetector, Alerter, LEVEL_NAME, LEVEL_COLOR
+from lcd_ui import make_lcd
 
 
 # ---------------------------------------------------------------- 스테레오 기하
@@ -220,9 +221,15 @@ def main():
     ap.add_argument("--buzzer-pin", type=int, default=None)
     ap.add_argument("--record", default=None, help="좌/우 원본 영상 저장 폴더")
     ap.add_argument("--show", action="store_true")
+    ap.add_argument("--lcd", nargs="?", const="0x27", default=None, metavar="ADDR",
+                    help="1602 I2C LCD 상태 화면 (주소 기본 0x27, fake = 터미널 미리보기)")
+    ap.add_argument("--lcd-no-blink", action="store_true", help="WARNING 때 LCD 백라이트 안 깜빡임")
     args = ap.parse_args()
 
+    lcd = make_lcd(args.lcd, blink=not args.lcd_no_blink)
+    lcd.message("SP_DEWS stereo", "calib loading")
     geo = StereoGeometry(args.calib)
+    lcd.message("SP_DEWS stereo", "camera start")
     if args.video:
         from stereo_cam import StereoVideo
         cam = StereoVideo(*args.video)
@@ -230,6 +237,7 @@ def main():
         from stereo_cam import StereoCamera
         cam = StereoCamera(geo.size, fps=args.fps, swap=args.swap)
 
+    lcd.message("SP_DEWS stereo", "model loading")
     det = (HailoDetector(args.hef, args.conf) if args.backend == "hailo"
            else UltralyticsDetector(args.weights, args.imgsz, args.conf))
     tracker = ByteTrackTracker(frame_rate=args.fps, track_activation_threshold=0.35,
@@ -283,6 +291,7 @@ def main():
             t = time.time()
             fps = 0.9 * fps + 0.1 / max(t - t_prev, 1e-6)
             t_prev = t
+            lcd.update(level, tracks, fps)   # 저장만 하고 바로 리턴 (LCD 쓰기는 별도 스레드)
             if args.show:
                 vis = l.copy()
                 draw(vis, tracks, level, fps, skew, int((src == "stereo").sum()) if len(bl) else 0)
@@ -292,6 +301,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        lcd.close()                      # LCD에 stopped / ERR 남김
         if writers:
             for w in writers:
                 w.release()

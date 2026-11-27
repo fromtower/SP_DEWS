@@ -20,6 +20,8 @@ import numpy as np
 import supervision as sv
 from trackers import ByteTrackTracker
 
+from lcd_ui import make_lcd
+
 LEVEL_NAME = {0: "CLEAR", 1: "DETECTED", 2: "WARNING"}
 LEVEL_COLOR = {0: (0, 200, 0), 1: (0, 200, 255), 2: (0, 0, 255)}  # BGR
 
@@ -249,10 +251,16 @@ def main():
     ap.add_argument("--udp", default=None, help="경고 JSON 보낼 곳 host:port")
     ap.add_argument("--buzzer-pin", type=int, default=None, help="GPIO 번호 (예: 17)")
     ap.add_argument("--show", action="store_true")
+    ap.add_argument("--lcd", nargs="?", const="0x27", default=None, metavar="ADDR",
+                    help="1602 I2C LCD 상태 화면 (주소 기본 0x27, fake = 터미널 미리보기)")
+    ap.add_argument("--lcd-no-blink", action="store_true", help="WARNING 때 LCD 백라이트 안 깜빡임")
     args = ap.parse_args()
 
+    lcd = make_lcd(args.lcd, blink=not args.lcd_no_blink)
+    lcd.message("SP_DEWS mono", "model loading")
     det = (HailoDetector(args.hef, args.conf) if args.backend == "hailo"
            else UltralyticsDetector(args.weights, args.imgsz, args.conf))
+    lcd.message("SP_DEWS mono", "camera start")
     cam = Camera(args.source, (args.width, args.height))
     # 작은 드론은 신뢰도가 낮게 나오는 경우가 많아서 기본값(0.7)보다 낮춤
     tracker = ByteTrackTracker(frame_rate=args.fps, track_activation_threshold=0.35,
@@ -281,6 +289,7 @@ def main():
 
             fps = 0.9 * fps + 0.1 / max(now - t_prev, 1e-6)
             t_prev = now
+            lcd.update(level, tracks, fps)   # 저장만 하고 바로 리턴 (LCD 쓰기는 별도 스레드)
             if args.show:
                 draw(frame, tracks, level, fps)
                 cv2.imshow("drone", frame)
@@ -289,6 +298,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        lcd.close()                      # LCD에 stopped / ERR 남김
         alerter.close()
         cam.close()
         det.close()
